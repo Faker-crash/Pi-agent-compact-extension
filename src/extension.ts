@@ -109,15 +109,30 @@ function toPlainList(messages: RawMessageLike[]): PlainMessage[] {
 // Memory source adapter (pi-side file I/O)
 // ============================================================================
 
+interface FileCacheEntry {
+	mtimeMs: number;
+	size: number;
+	content?: string;
+}
+
+/** mtime+size keyed cache: unchanged files are not re-read between folds. */
+const fileContentCache = new Map<string, FileCacheEntry>();
+
 async function readFirstBytes(filePath: string, maxBytes = 1024 * 1024): Promise<string | undefined> {
 	try {
 		const stat = await fsp.stat(filePath);
 		if (!stat.isFile()) return undefined;
+		const cached = fileContentCache.get(filePath);
+		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size && cached.content !== undefined) {
+			return cached.content;
+		}
 		const handle = await fsp.open(filePath, "r");
 		try {
 			const buffer = Buffer.alloc(Math.min(maxBytes, stat.size));
 			const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-			return buffer.subarray(0, bytesRead).toString("utf8");
+			const content = buffer.subarray(0, bytesRead).toString("utf8");
+			fileContentCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, content });
+			return content;
 		} finally {
 			await handle.close();
 		}
@@ -126,13 +141,20 @@ async function readFirstBytes(filePath: string, maxBytes = 1024 * 1024): Promise
 	}
 }
 
+const mtimeAgeCache = new Map<string, number>();
+
 async function mtimeAgeDays(filePath: string): Promise<number> {
+	const cached = mtimeAgeCache.get(filePath);
+	if (cached !== undefined) return cached;
+	let age = Number.POSITIVE_INFINITY;
 	try {
 		const stat = await fsp.stat(filePath);
-		return (Date.now() - stat.mtimeMs) / 86_400_000;
+		age = (Date.now() - stat.mtimeMs) / 86_400_000;
 	} catch {
-		return Number.POSITIVE_INFINITY;
+		// keep infinity
 	}
+	mtimeAgeCache.set(filePath, age);
+	return age;
 }
 
 const AGENTS_NAMES = ["AGENTS.md", "CLAUDE.md", "AGENTS.override.md"];

@@ -314,3 +314,33 @@ test("integration: manual fold failures cap after three attempts", async () => {
 	assert.equal(calls, 0, "armed flag cleared after repeated failures");
 	ctx.modelRegistry.complete = original;
 });
+
+test("integration: memory file edits between folds are picked up (cache invalidates on mtime)", async () => {
+	await makeEnv();
+	const ext = await loadExtension();
+	// First fold reads the sibling session file (same instance => file cache populated).
+	const ctxA = makeCtx(longConversation(8));
+	ctxA.sessionManager.getSessionId = () => "sess-A";
+	await ext.command.handler("", ctxA);
+	const first = (await ext.handlers.get("context")!({ messages: longConversation(8) }, ctxA)) as { messages: any[] } | undefined;
+	assert.ok(first?.messages);
+
+	// Edit the sibling compaction summary on disk (mtime changes), then fold again on
+	// the same extension instance: the cache must invalidate and pick up the new text.
+	const ctxB = makeCtx(longConversation(8));
+	ctxB.sessionManager.getSessionId = () => "sess-B";
+	await fsp.writeFile(
+		path.join(sessionDir, "2026-09-01_old.jsonl"),
+		[
+			JSON.stringify({ type: "session", id: "old" }),
+			JSON.stringify({ type: "compaction", summary: "updated memory compact 设计 v2" }),
+		].join("\n"),
+	);
+	await ext.command.handler("", ctxB);
+	const second = (await ext.handlers.get("context")!({ messages: longConversation(8) }, ctxB)) as { messages: any[] } | undefined;
+	assert.ok(second?.messages);
+	const injected = second.messages.find((m: any) =>
+		Array.isArray(m.content) && m.content.some((c: any) => typeof c.text === "string" && c.text.includes("updated memory compact 设计 v2")),
+	);
+	assert.ok(injected, "edited memory file was picked up after mtime change");
+});
