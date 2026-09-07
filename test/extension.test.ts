@@ -25,6 +25,7 @@ let agentDir: string;
 
 async function makeEnv() {
 	tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "pi-mc-"));
+	sharedEntries = [];
 	sessionDir = path.join(tmpRoot, "sessions", "--proj--");
 	agentDir = path.join(tmpRoot, "agent");
 	await fsp.mkdir(sessionDir, { recursive: true });
@@ -44,11 +45,17 @@ async function makeEnv() {
 interface Loaded {
 	handlers: Map<string, (event: any, ctx: Ctx) => unknown>;
 	command: { description: string; handler: (args: string, ctx: Ctx) => Promise<void> };
+	/** Custom entries appended via pi.appendEntry by this extension instance. */
+	appended: any[];
 }
 
-async function loadExtension(): Promise<Loaded> {
+/** Shared mutable store so a "restarted" instance can see entries of the "previous" one. */
+let sharedEntries: any[] = [];
+
+async function loadExtension(opts?: { freshEntries?: boolean }): Promise<Loaded> {
 	const mod = await import(`../src/extension.ts?${Date.now()}-${Math.random()}`);
 	const handlers = new Map<string, (event: any, ctx: Ctx) => unknown>();
+	const appended: any[] = opts?.freshEntries ? [] : sharedEntries;
 	let command: any;
 	const pi = {
 		on(event: string, handler: any) {
@@ -57,9 +64,12 @@ async function loadExtension(): Promise<Loaded> {
 		registerCommand(name: string, options: any) {
 			command = { name, ...options };
 		},
+		appendEntry(customType: string, data: unknown) {
+			appended.push({ type: "custom", customType, data, timestamp: Date.now() });
+		},
 	};
 	await mod.default(pi);
-	return { handlers, command };
+	return { handlers, command, appended };
 }
 
 function makeCtx(_messages: any[]): Ctx {
@@ -78,6 +88,7 @@ function makeCtx(_messages: any[]): Ctx {
 			getSessionFile: () => path.join(sessionDir, "2026-09-07_current.jsonl"),
 			getSessionName: () => undefined,
 			getLeafId: () => "leaf",
+			getEntries: () => sharedEntries,
 			// Current-session tree memory source: an earlier branch summary on this branch.
 			getBranch: () => [
 				{ type: "branch_summary", summary: "tree memory compact 分支摘要：本会话早期分支结论" },
@@ -174,4 +185,45 @@ test("integration: prefix change (branch switch) invalidates checkpoint and pass
 	const ctx2 = makeCtx(branch);
 	const result = await handlers.get("context")!({ messages: branch }, ctx2);
 	assert.equal(result, undefined);
+});
+
+test("integration: checkpoint persists via appendEntry and restores on session_start", async () => {
+	await makeEnv();
+	const ext = await loadExtension();
+	const ctx = makeCtx(longConversation(8));
+	await ext.command.handler("", ctx);
+	const first = (await ext.handlers.get("context")!({ messages: longConversation(8) }, ctx)) as { messages: any[] } | undefined;
+	assert.ok(first?.messages, "fold produced a compacted view");
+	const persisted = sharedEntries.filter((e) => e?.customType === "pi-memory-compact.checkpoint");
+	assert.equal(persisted.length, 1, "checkpoint written as a custom entry");
+	assert.equal(persisted[0].data.summary.includes("## Goal"), true);
+
+	// Simulate a fresh extension instance (new process/restart): restore from session entries.
+	const restarted = await loadExtension({ freshEntries: true });
+	sharedEntries = ext.appended; // "session file" carries the entries written before
+	await restarted.handlers.get("session_start")!({}, makeCtx(longConversation(8)));
+
+	// Now a context request should reuse the restored checkpoint (injected summary) without a manual arm.
+	const reused = (await restarted.handlers.get("context")!({ messages: longConversation(8) }, makeCtx(longConversation(8)))) as { messages: any[] } | undefined;
+	assert.ok(reused?.messages, "restored checkpoint applied on next request");
+	const injected = reused.messages.find((m: any) =>
+		Array.isArray(m.content) && m.content.some((c: any) => typeof c.text === "string" && c.text.includes("<summary>")),
+	);
+	assert.ok(injected, "summary injected from restored checkpoint");
+});
+
+test("integration: reset writes a marker so restore ignores stale checkpoints", async () => {
+	await makeEnv();
+	const ext = await loadExtension();
+	const ctx = makeCtx(longConversation(8));
+	await ext.command.handler("", ctx);
+	await ext.handlers.get("context")!({ messages: longConversation(8) }, ctx);
+	await ext.command.handler("reset", ctx);
+
+	// A fresh instance restoring the same session entries must find no checkpoint.
+	const restarted = await loadExtension({ freshEntries: true });
+	sharedEntries = ext.appended;
+	await restarted.handlers.get("session_start")!({}, makeCtx(longConversation(8)));
+	const after = await restarted.handlers.get("context")!({ messages: longConversation(8) }, makeCtx(longConversation(8)));
+	assert.equal(after, undefined, "reset marker invalidates the persisted checkpoint");
 });

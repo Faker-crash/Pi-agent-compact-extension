@@ -62,3 +62,82 @@ export function injectedBlock(memories: MemoryCandidate[], summary: string): str
 	const summaryText = formatSummary(summary);
 	return memoryText ? `${memoryText}\n\n${summaryText}` : summaryText;
 }
+
+// ============================================================================
+// Checkpoint persistence helpers (Route A: custom session entries)
+// ============================================================================
+
+/** Custom-entry type used to persist a checkpoint inside the session. */
+export const CHECKPOINT_ENTRY_TYPE = "pi-memory-compact.checkpoint";
+
+/** Custom-entry type used to mark "reset": any earlier checkpoint is stale. */
+export const RESET_ENTRY_TYPE = "pi-memory-compact.reset";
+
+/** Minimal shape of a persisted custom entry as read back from the session. */
+export interface CustomEntryLike<T = unknown> {
+	type: "custom";
+	customType: string;
+	data?: T;
+	timestamp?: string | number;
+}
+
+/** Serializable snapshot of a Checkpoint (memories included). */
+export function serializeCheckpoint(cp: Checkpoint): unknown {
+	return cp;
+}
+
+/**
+ * Restore the latest valid checkpoint from a list of custom entries.
+ * A reset marker invalidates everything before it; only the newest checkpoint
+ * after the newest reset is used. Malformed payloads are skipped.
+ */
+export function restoreCheckpoint(entries: CustomEntryLike[]): Checkpoint | undefined {
+	let latestResetAt = -1;
+	const candidates: { index: number; data: unknown }[] = [];
+	entries.forEach((entry, index) => {
+		if (entry?.type !== "custom") return;
+		if (entry.customType === RESET_ENTRY_TYPE) {
+			latestResetAt = index;
+			candidates.length = 0; // any checkpoint before reset is stale
+			return;
+		}
+		if (entry.customType === CHECKPOINT_ENTRY_TYPE) {
+			candidates.push({ index, data: entry.data });
+		}
+	});
+	if (candidates.length === 0) return undefined;
+	const last = candidates[candidates.length - 1];
+	if (last.index <= latestResetAt) return undefined;
+	return parseCheckpoint(last.data);
+}
+
+function parseCheckpoint(data: unknown): Checkpoint | undefined {
+	if (!data || typeof data !== "object") return undefined;
+	const d = data as Partial<Checkpoint>;
+	if (
+		typeof d.headEnd !== "number" ||
+		typeof d.headFingerprint !== "string" ||
+		typeof d.foldThrough !== "number" ||
+		typeof d.summary !== "string" ||
+		typeof d.tokensBefore !== "number" ||
+		!Array.isArray(d.memories)
+	) {
+		return undefined;
+	}
+	const memories = d.memories.filter(
+		(m): m is MemoryCandidate =>
+			!!m &&
+			typeof m.text === "string" &&
+			typeof m.label === "string" &&
+			typeof m.recency === "number",
+	);
+	if (memories.length !== d.memories.length) return undefined;
+	return {
+		headEnd: d.headEnd,
+		headFingerprint: d.headFingerprint,
+		foldThrough: d.foldThrough,
+		memories,
+		summary: d.summary,
+		tokensBefore: d.tokensBefore,
+	};
+}

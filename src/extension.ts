@@ -1,6 +1,16 @@
 import { promises as fsp } from "node:fs";
 import * as path from "node:path";
-import { buildView, fingerprintMessages, injectedBlock, type Checkpoint } from "./compact.ts";
+import {
+	buildView,
+	CHECKPOINT_ENTRY_TYPE,
+	fingerprintMessages,
+	injectedBlock,
+	RESET_ENTRY_TYPE,
+	restoreCheckpoint,
+	serializeCheckpoint,
+	type Checkpoint,
+	type CustomEntryLike,
+} from "./compact.ts";
 import { estimateTokens, planFold, planHead, type FoldPolicy } from "./plan.ts";
 import { rankMemories, truncateMemories } from "./memory.ts";
 import { buildSummarizationPromptText, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.ts";
@@ -275,6 +285,7 @@ async function agentDirOf(ctx: any): Promise<string> {
 export default function memoryCompactExtension(pi: {
 	on(event: string, handler: (event: any, ctx: any) => unknown): void;
 	registerCommand(name: string, options: { description?: string; handler: (args: string, ctx: any) => Promise<void> }): void;
+	appendEntry(customType: string, data?: unknown): void;
 }) {
 	let notify = (_msg: string, _level: "info" | "warning" | "error") => {};
 
@@ -287,6 +298,11 @@ export default function memoryCompactExtension(pi: {
 			const trimmed = args.trim();
 			if (trimmed === "reset") {
 				stateBySession.delete(sessionKey);
+				try {
+					pi.appendEntry(RESET_ENTRY_TYPE, { resetAt: Date.now() });
+				} catch {
+					// In-memory clear still applies; persistence is best-effort.
+				}
 				notify("Memory-compact state cleared.", "info");
 				return;
 			}
@@ -398,6 +414,11 @@ export default function memoryCompactExtension(pi: {
 							tokensBefore: estimateTokens(messages),
 						};
 						st.checkpoint = checkpoint;
+						try {
+							pi.appendEntry(CHECKPOINT_ENTRY_TYPE, serializeCheckpoint(checkpoint));
+						} catch {
+							// Persistence is best-effort; the in-memory checkpoint still applies.
+						}
 					}
 				} catch (error) {
 					notify(`Memory-compact failed: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -433,5 +454,16 @@ export default function memoryCompactExtension(pi: {
 	pi.on("session_start", async (_event: unknown, ctx: any) => {
 		const key = ctx.sessionManager?.getSessionId?.() ?? ctx.cwd;
 		stateBySession.delete(key);
+		// Restore a persisted checkpoint written as a custom entry in a previous run.
+		// The context handler re-validates head/fold indices and drops stale state.
+		try {
+			const entries = (ctx.sessionManager?.getEntries?.() ?? []) as CustomEntryLike[];
+			const checkpoint = restoreCheckpoint(entries);
+			if (checkpoint) {
+				stateBySession.set(key, { checkpoint });
+			}
+		} catch {
+			// Restore is best-effort; a fresh fold will be created on demand.
+		}
 	});
 }
