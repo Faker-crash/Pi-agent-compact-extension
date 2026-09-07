@@ -275,6 +275,20 @@ pi 原生压缩（`dist/core/compaction/compaction.js`）：
 - 会话 JSONL 零写入、零删除；记忆候选 = AGENTS.md 族 + 同项目会话文件的
   compaction/branch_summary/首条用户消息，BM25（CJK 2-gram + 拉丁词）+ 时间衰减打分。
 
+### 优化迭代（A→B 逐模块，每模块全测后提交）
+
+| 项 | 改动 | 状态 |
+| --- | --- | --- |
+| A1 | 记忆源补齐「当前会话树」compaction/branch 摘要（`parseSessionTreeCandidates` + `getBranch` 接入） | ✅ |
+| A2 | checkpoint 持久化：custom session entry 存/取，reset 写失效标记，`session_start` 恢复 | ✅ |
+| A3 | 摘要折叠锁由全局布尔改为 per-session `Set` | ✅ |
+| A4 | `/memory-compact` 失败保留 armed 标志并限次重试；修复状态写回丢失 pendingManual | ✅ |
+| B5 | AGENTS.md 祖先遍历在 home 截止（`computeContextRoots` 纯函数） | ✅ |
+| B6 | 记忆源文件读取按 mtime+size 缓存；mtime 年龄缓存 | ✅ |
+| B7 | 摘要输入工具结果截断（`maxToolResultChars`，默认 2000，对齐 pi） | ✅ |
+| B8 | usage-aware 上下文估算（`estimateContextTokens`：最近 assistant usage + 尾部估算） | ✅ |
+| B9 | settings/agentDir 按会话缓存，`/memory-compact N` 覆盖不再跨会话泄漏 | ✅ |
+
 ### 实现文件状态
 
 - `src/plan.ts` `src/compact.ts` `src/memory.ts` `src/sources.ts` `src/serialize.ts`

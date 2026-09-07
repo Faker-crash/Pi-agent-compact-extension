@@ -57,7 +57,8 @@
   "useSiblingSessions": true,
   "bm25K1": 1.5,
   "bm25B": 0.75,
-  "maxMemoryItemChars": 1200
+  "maxMemoryItemChars": 1200,
+  "maxToolResultChars": 2000
 }
 ```
 
@@ -71,6 +72,7 @@
 | `useSiblingSessions` | `true` | 记忆源：同项目历史会话 JSONL（compaction/branch 摘要 + 首条用户消息） |
 | `bm25K1` / `bm25B` | `1.5` / `0.75` | BM25 参数 |
 | `maxMemoryItemChars` | `1200` | 单条注入记忆上限 |
+| `maxToolResultChars` | `2000` | 序列化摘要输入时把工具结果截断到该字符数 |
 
 ### 3. 使用
 

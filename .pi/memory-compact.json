@@ -7,5 +7,6 @@
   "useSiblingSessions": true,
   "bm25K1": 1.5,
   "bm25B": 0.75,
-  "maxMemoryItemChars": 1200
+  "maxMemoryItemChars": 1200,
+  "maxToolResultChars": 2000
 }

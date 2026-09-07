@@ -64,7 +64,8 @@ Environment variables `PI_MEMORY_COMPACT_*` override any of these.
   "useSiblingSessions": true,
   "bm25K1": 1.5,
   "bm25B": 0.75,
-  "maxMemoryItemChars": 1200
+  "maxMemoryItemChars": 1200,
+  "maxToolResultChars": 2000
 }
 ```
 
@@ -78,6 +79,7 @@ Environment variables `PI_MEMORY_COMPACT_*` override any of these.
 | `useSiblingSessions` | `true` | Memory source: same-project historical session JSONLs (compaction/branch summaries + first user message) |
 | `bm25K1` / `bm25B` | `1.5` / `0.75` | BM25 parameters |
 | `maxMemoryItemChars` | `1200` | Max chars per injected memory item |
+| `maxToolResultChars` | `2000` | Truncate tool results to this many chars when serializing summarization input |
 
 ### 3. Usage
 
