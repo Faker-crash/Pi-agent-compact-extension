@@ -305,7 +305,6 @@ test("integration: manual fold failures cap after three attempts", async () => {
 	}
 	// After 3 failures the flag is dropped; a 5th request must not attempt another fold.
 	let calls = 0;
-	const probe = makeCtx(longConversation(8));
 	const original = ctx.modelRegistry.complete;
 	ctx.modelRegistry.complete = async () => {
 		calls++;

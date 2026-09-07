@@ -142,3 +142,25 @@ test("parseSessionTreeCandidates extracts current-session compaction and branch 
 	assert.ok(c.some((x) => x.text === "某个分支的摘要 content" && x.label.includes("(branch)")));
 	assert.ok(c.every((x) => x.recency === 1));
 });
+
+test("computeContextRoots stops at home and includes agentDir exactly once", async () => {
+	const { computeContextRoots } = await import("../src/sources.ts");
+	const roots = computeContextRoots("/Users/u/proj/sub", "/Users/u/.pi/agent", "/Users/u");
+	// cwd -> /Users/u/proj -> /Users/u/proj? no: parent chain is /Users/u/proj -> /Users/u (home, stop)
+	assert.deepEqual(roots, ["/Users/u/proj/sub", "/Users/u/proj", "/Users/u", "/Users/u/.pi/agent"]);
+});
+
+test("computeContextRoots does not dedupe incorrectly when agentDir is inside home chain", async () => {
+	const { computeContextRoots } = await import("../src/sources.ts");
+	// agentDir inside an already visited dir is appended once; path may differ lexically
+	const roots = computeContextRoots("/Users/u/a", "/Users/u/.pi/agent", "/Users/u");
+	assert.ok(roots.includes("/Users/u/.pi/agent"));
+	assert.equal(roots.filter((r) => r === "/Users/u/.pi/agent").length, 1);
+});
+
+test("computeContextRoots stops at home instead of walking to filesystem root", async () => {
+	const { computeContextRoots } = await import("../src/sources.ts");
+	const roots = computeContextRoots("/Users/u/proj", "/Users/u/.pi/agent", "/Users/u");
+	assert.ok(!roots.includes("/"), "home boundary stops the ancestor walk before /");
+	assert.deepEqual(roots, ["/Users/u/proj", "/Users/u", "/Users/u/.pi/agent"]);
+});

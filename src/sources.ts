@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { MemoryCandidate } from "./types.ts";
 
 /**
@@ -119,4 +120,43 @@ export function parseSessionTreeCandidates(entries: TreeEntryLike[], labelPrefix
 		}
 	}
 	return candidates;
+}
+
+/**
+ * Directories to scan for AGENTS.md-family context files.
+ *
+ * B5: pi collects context files from cwd upward; walking to the filesystem
+ * root (/) stats AGENTS.md/CLAUDE.md/AGENTS.override.md at every ancestor,
+ * including unrelated ones. Stop at the user home directory (inclusive) and
+ * add the agentDir explicitly when it is not already in that chain.
+ */
+export function computeContextRoots(cwd: string, agentDir: string, home: string): string[] {
+	const roots: string[] = [];
+	const resolvedHome = path.resolve(home);
+	const start = path.resolve(cwd);
+	let dir = start;
+	while (true) {
+		roots.push(dir);
+		if (dir === resolvedHome) break;
+		const parent = path.dirname(dir);
+		if (parent === dir) break; // filesystem root guard
+		dir = parent;
+	}
+	if (agentDir) {
+		const resolvedAgentDir = path.resolve(agentDir);
+		if (!roots.includes(resolvedAgentDir)) roots.push(resolvedAgentDir);
+	}
+	return roots;
+}
+
+/** Apply a home dir boundary to the classic ancestor walk. */
+export function isSameOrChild(child: string, parent: string): boolean {
+	const rp = path.resolve(parent);
+	let cur = path.resolve(child);
+	while (true) {
+		if (cur === rp) return true;
+		const next = path.dirname(cur);
+		if (next === cur) return false;
+		cur = next;
+	}
 }

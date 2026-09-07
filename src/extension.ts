@@ -14,7 +14,14 @@ import {
 import { estimateTokens, planFold, planHead, type FoldPolicy } from "./plan.ts";
 import { rankMemories, truncateMemories } from "./memory.ts";
 import { buildSummarizationPromptText, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.ts";
-import { parseContextFileCandidates, parseSessionCandidates, parseSessionTreeCandidates, recencyFromAgeDays, type TreeEntryLike } from "./sources.ts";
+import {
+	computeContextRoots,
+	parseContextFileCandidates,
+	parseSessionCandidates,
+	parseSessionTreeCandidates,
+	recencyFromAgeDays,
+	type TreeEntryLike,
+} from "./sources.ts";
 import { parseMemoryCompactConfig } from "./settings.ts";
 import type { MemoryCandidate, MemoryCompactSettings, PlainMessage, PlainRole } from "./types.ts";
 
@@ -130,19 +137,12 @@ async function mtimeAgeDays(filePath: string): Promise<number> {
 
 const AGENTS_NAMES = ["AGENTS.md", "CLAUDE.md", "AGENTS.override.md"];
 
-/** Walk from cwd up to agentDir inclusive looking for AGENTS.md family files. */
+/** Walk from cwd up to home (inclusive) plus agentDir looking for AGENTS.md family files. */
 async function collectAgentsMd(settings: MemoryCompactSettings): Promise<MemoryCandidate[]> {
 	if (!settings.useAgentsMd) return [];
 	const candidates: MemoryCandidate[] = [];
-	const roots: string[] = [];
-	if (settings.agentDir) roots.push(settings.agentDir);
-	let dir = settings.cwd;
-	while (dir) {
-		roots.push(dir);
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
+	const home = process.env.HOME ?? process.env.USERPROFILE ?? path.dirname(settings.cwd);
+	const roots = computeContextRoots(settings.cwd, settings.agentDir, home);
 	const seen = new Set<string>();
 	for (const root of roots) {
 		for (const name of AGENTS_NAMES) {
