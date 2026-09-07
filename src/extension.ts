@@ -254,6 +254,42 @@ const stateBySession = new Map<string, SessionState>();
 const configByCwd = new Map<string, MemoryCompactSettings>();
 const summarizeInFlight = new Set<string>();
 
+/** Per-session resolved context so agentDir/config are not recomputed on every event. */
+interface SessionContext {
+	cwd: string;
+	agentDir: string;
+	sessionDir: string;
+	sessionFile: string | undefined;
+	cfg: MemoryCompactSettings;
+}
+
+const sessionContextCache = new Map<string, SessionContext>();
+
+async function resolveSessionContext(
+	sessionKey: string,
+	cwd: string,
+	sessionDir: string,
+	sessionFile: string | undefined,
+): Promise<SessionContext> {
+	const cached = sessionContextCache.get(sessionKey);
+	if (
+		cached &&
+		cached.cwd === cwd &&
+		cached.sessionDir === sessionDir &&
+		cached.sessionFile === sessionFile
+	) {
+		return cached;
+	}
+	const agentDir = await agentDirOfCwd(sessionDir);
+	const base = await resolveSettings(cwd, agentDir, sessionDir, sessionFile);
+	// Shallow clone so a per-session N override (/memory-compact N) never leaks
+	// into other sessions sharing the same cwd.
+	const cfg: MemoryCompactSettings = { ...base, sessionFile };
+	const next: SessionContext = { cwd, agentDir, sessionDir, sessionFile, cfg };
+	sessionContextCache.set(sessionKey, next);
+	return next;
+}
+
 /** Read optional JSON config from <cwd>/.pi/memory-compact.json then ~/.pi/agent/memory-compact.json. */
 async function loadConfigJson(cwd: string, agentDir: string): Promise<string | undefined> {
 	const candidates = [
@@ -315,8 +351,7 @@ function foldBoundaryFor(
 }
 
 /** Best-effort agent dir resolution (~/.pi/agent). */
-async function agentDirOf(ctx: any): Promise<string> {
-	const sessionDir: string | undefined = ctx.sessionManager?.getSessionDir?.();
+async function agentDirOfCwd(sessionDir: string | undefined): Promise<string> {
 	if (sessionDir) {
 		const parent = path.dirname(sessionDir);
 		if (path.basename(parent) === "sessions") return path.dirname(parent);
@@ -340,6 +375,7 @@ export default function memoryCompactExtension(pi: {
 			const trimmed = args.trim();
 			if (trimmed === "reset") {
 				stateBySession.delete(sessionKey);
+				sessionContextCache.delete(sessionKey);
 				try {
 					pi.appendEntry(RESET_ENTRY_TYPE, { resetAt: Date.now() });
 				} catch {
@@ -353,9 +389,13 @@ export default function memoryCompactExtension(pi: {
 			stateBySession.set(sessionKey, st);
 			const n = parseInt(trimmed, 10);
 			if (Number.isInteger(n) && n > 0) {
-				const cfg = await resolveSettings(ctx.cwd, await agentDirOf(ctx), ctx.sessionManager?.getSessionDir?.() ?? "", ctx.sessionManager?.getSessionFile?.());
-				cfg.headMessages = n;
-				configByCwd.set(ctx.cwd, cfg);
+				const sc = await resolveSessionContext(
+					sessionKey,
+					ctx.cwd,
+					ctx.sessionManager?.getSessionDir?.() ?? "",
+					ctx.sessionManager?.getSessionFile?.(),
+				);
+				sc.cfg.headMessages = n;
 			}
 			notify("Memory-compact armed: the next model request will keep the opening messages, inject related memories, and fold the rest into a summary.", "info");
 		},
@@ -366,13 +406,14 @@ export default function memoryCompactExtension(pi: {
 		const cwd = ctx.cwd;
 		const sessionDir = ctx.sessionManager.getSessionDir?.() ?? "";
 		const sessionFile = ctx.sessionManager.getSessionFile?.();
-		const cfg = await resolveSettings(cwd, await agentDirOf(ctx), sessionDir, sessionFile);
+		const sessionKey = ctx.sessionManager.getSessionId?.() ?? cwd;
+		const sc = await resolveSessionContext(sessionKey, cwd, sessionDir, sessionFile);
+		const cfg = sc.cfg;
 		notify = (msg, level) => ctx.ui?.notify?.(msg, level) ?? undefined;
 		if (!cfg.enabled) return undefined;
 		const raw = event.messages ?? [];
 		if (raw.length === 0) return undefined;
 
-		const sessionKey = ctx.sessionManager.getSessionId?.() ?? cwd;
 		const st = stateBySession.get(sessionKey) ?? { checkpoint: undefined };
 		const messages = toPlainList(raw);
 		const contextWindow = ctx.model?.contextWindow ?? 200_000;
@@ -531,6 +572,7 @@ export default function memoryCompactExtension(pi: {
 	pi.on("session_start", async (_event: unknown, ctx: any) => {
 		const key = ctx.sessionManager?.getSessionId?.() ?? ctx.cwd;
 		stateBySession.delete(key);
+		sessionContextCache.delete(key);
 		// Restore a persisted checkpoint written as a custom entry in a previous run.
 		// The context handler re-validates head/fold indices and drops stale state.
 		try {

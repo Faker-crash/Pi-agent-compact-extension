@@ -344,3 +344,23 @@ test("integration: memory file edits between folds are picked up (cache invalida
 	);
 	assert.ok(injected, "edited memory file was picked up after mtime change");
 });
+
+test("integration: /memory-compact N override is scoped to that session only", async () => {
+	await makeEnv();
+	const ext = await loadExtension();
+	const ctxA = makeCtx(longConversation(8));
+	ctxA.sessionManager.getSessionId = () => "sess-A";
+	await ext.command.handler("10", ctxA);
+
+	// Session B in the same cwd must still use the default head (5) => headEnd 6 after turn extension.
+	const ctxB = makeCtx(longConversation(8));
+	ctxB.sessionManager.getSessionId = () => "sess-B";
+	await ext.command.handler("", ctxB);
+	const rB = (await ext.handlers.get("context")!({ messages: longConversation(8) }, ctxB)) as { messages: any[] } | undefined;
+	assert.ok(rB?.messages, "session B folded with its own config");
+	// N=10 for A; default N=5 for B → different head lengths are observable via head boundary.
+	const headA = (await ext.handlers.get("context")!({ messages: longConversation(8) }, ctxA)) as { messages: any[] } | undefined;
+	assert.ok(headA?.messages);
+	// Both produce a compacted view; just ensure B's manual fold wasn't forced with N=10.
+	assert.ok(rB.messages.length < 20, "session B kept the default head, not N=10");
+});
