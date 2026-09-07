@@ -78,6 +78,10 @@ function makeCtx(_messages: any[]): Ctx {
 			getSessionFile: () => path.join(sessionDir, "2026-09-07_current.jsonl"),
 			getSessionName: () => undefined,
 			getLeafId: () => "leaf",
+			// Current-session tree memory source: an earlier branch summary on this branch.
+			getBranch: () => [
+				{ type: "branch_summary", summary: "tree memory compact 分支摘要：本会话早期分支结论" },
+			],
 		},
 		signal: undefined,
 	};
@@ -103,6 +107,7 @@ test("integration: manual /memory-compact rewrites context into head+memory+summ
 	const text = (injected.content as any[]).map((c) => c.text).join("");
 	assert.ok(text.includes("<memory>"), "memory section present");
 	assert.ok(text.includes("memory compact 设计"), "sibling-session memory was retrieved");
+	assert.ok(text.includes("tree memory compact 分支摘要"), "current-session tree memory was retrieved");
 	assert.ok(text.includes("## Goal"), "summary content present");
 	// original message objects preserved verbatim (not reserialized)
 	assert.deepEqual(out[0], rawMessage("user", "user turn 0: memory compact design question"));

@@ -87,3 +87,36 @@ export function parseContextFileCandidates(
 	const maxChars = opts.maxChars ?? 20000;
 	return [{ label: opts.label, text: text.slice(0, maxChars), recency: opts.recency }];
 }
+
+/** Minimal view of a pi session entry for tree-sourced candidates. */
+export interface TreeEntryLike {
+	type?: string;
+	summary?: string;
+	customType?: string;
+}
+
+/**
+ * Current-session tree memories: earlier `compaction` entries and
+ * `branch_summary` entries on the active branch (DESIGN.md §3.3 source #1).
+ * Feed it `sessionManager.getBranch()` output. Current-session entries are the
+ * most recent context, so recency is 1.
+ */
+export function parseSessionTreeCandidates(entries: TreeEntryLike[], labelPrefix = "current session"): MemoryCandidate[] {
+	const candidates: MemoryCandidate[] = [];
+	for (const entry of entries) {
+		if (entry?.type === "compaction" && typeof entry.summary === "string" && entry.summary.trim()) {
+			candidates.push({
+				label: `${labelPrefix} (compaction)`,
+				text: entry.summary.trim(),
+				recency: 1,
+			});
+		} else if (entry?.type === "branch_summary" && typeof entry.summary === "string" && entry.summary.trim()) {
+			candidates.push({
+				label: `${labelPrefix} (branch)`,
+				text: entry.summary.trim(),
+				recency: 1,
+			});
+		}
+	}
+	return candidates;
+}

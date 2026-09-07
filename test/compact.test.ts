@@ -127,3 +127,18 @@ test("fingerprintMessages is stable for identical prefixes and differs otherwise
 	assert.notEqual(fingerprintMessages(a), fingerprintMessages(b));
 	assert.ok(fingerprintMessages([]).length > 0);
 });
+
+test("parseSessionTreeCandidates extracts current-session compaction and branch summaries", async () => {
+	const { parseSessionTreeCandidates } = await import("../src/sources.ts");
+	const entries = [
+		{ type: "message", summary: undefined },
+		{ type: "compaction", summary: "当前会话早期压缩摘要 content" },
+		{ type: "branch_summary", summary: "某个分支的摘要 content" },
+		{ type: "compaction", summary: "   " },
+	];
+	const c = parseSessionTreeCandidates(entries);
+	assert.equal(c.length, 2);
+	assert.ok(c.some((x) => x.text === "当前会话早期压缩摘要 content" && x.label.includes("(compaction)")));
+	assert.ok(c.some((x) => x.text === "某个分支的摘要 content" && x.label.includes("(branch)")));
+	assert.ok(c.every((x) => x.recency === 1));
+});

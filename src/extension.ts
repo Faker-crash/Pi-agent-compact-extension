@@ -4,7 +4,7 @@ import { buildView, fingerprintMessages, injectedBlock, type Checkpoint } from "
 import { estimateTokens, planFold, planHead, type FoldPolicy } from "./plan.ts";
 import { rankMemories, truncateMemories } from "./memory.ts";
 import { buildSummarizationPromptText, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.ts";
-import { parseContextFileCandidates, parseSessionCandidates, recencyFromAgeDays } from "./sources.ts";
+import { parseContextFileCandidates, parseSessionCandidates, parseSessionTreeCandidates, recencyFromAgeDays, type TreeEntryLike } from "./sources.ts";
 import { parseMemoryCompactConfig } from "./settings.ts";
 import type { MemoryCandidate, MemoryCompactSettings, PlainMessage, PlainRole } from "./types.ts";
 
@@ -174,8 +174,15 @@ async function collectSiblingSessions(settings: MemoryCompactSettings): Promise<
 	return candidates;
 }
 
-async function collectMemoryCandidates(settings: MemoryCompactSettings): Promise<MemoryCandidate[]> {
+async function collectMemoryCandidates(
+	settings: MemoryCompactSettings,
+	treeEntries?: TreeEntryLike[],
+): Promise<MemoryCandidate[]> {
 	const candidates: MemoryCandidate[] = [];
+	// DESIGN.md §3.3 source #1: this session's own earlier compaction / branch summaries.
+	if (treeEntries && treeEntries.length > 0) {
+		candidates.push(...parseSessionTreeCandidates(treeEntries));
+	}
 	candidates.push(...(await collectAgentsMd(settings)));
 	candidates.push(...(await collectSiblingSessions(settings)));
 	return candidates;
@@ -353,7 +360,7 @@ export default function memoryCompactExtension(pi: {
 				summarizeInFlight = true;
 				try {
 					const head = messages.slice(0, headEnd);
-					const candidates = await collectMemoryCandidates(cfg);
+					const candidates = await collectMemoryCandidates(cfg, ctx.sessionManager?.getBranch?.() ?? []);
 					const memories = selectMemories(head, candidates, cfg);
 					const previousSummary = checkpoint?.summary;
 					const promptText = buildSummarizationPromptText(foldBody, {
