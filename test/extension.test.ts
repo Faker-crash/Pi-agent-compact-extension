@@ -227,3 +227,42 @@ test("integration: reset writes a marker so restore ignores stale checkpoints", 
 	const after = await restarted.handlers.get("context")!({ messages: longConversation(8) }, makeCtx(longConversation(8)));
 	assert.equal(after, undefined, "reset marker invalidates the persisted checkpoint");
 });
+
+test("integration: folding is locked per session, not globally", async () => {
+	await makeEnv();
+	const ext = await loadExtension();
+
+	// Session A's summarizer blocks until released.
+	let releaseA: () => void = () => {};
+	const gateA = new Promise<void>((res) => (releaseA = res));
+	let aCalled = 0;
+	const ctxA = makeCtx(longConversation(8));
+	ctxA.sessionManager.getSessionId = () => "sess-A";
+	ctxA.modelRegistry.complete = async () => {
+		aCalled++;
+		await gateA;
+		return { content: [{ type: "text", text: "## Goal\nsummary A" }] };
+	};
+
+	// Session B is independent and should fold while A is still in flight.
+	let bCalled = 0;
+	const ctxB = makeCtx(longConversation(8));
+	ctxB.sessionManager.getSessionId = () => "sess-B";
+	ctxB.modelRegistry.complete = async () => {
+		bCalled++;
+		return { content: [{ type: "text", text: "## Goal\nsummary B" }] };
+	};
+
+	await ext.command.handler("", ctxA);
+	const pA = ext.handlers.get("context")!({ messages: longConversation(8) }, ctxA);
+
+	await ext.command.handler("", ctxB);
+	const rB = (await ext.handlers.get("context")!({ messages: longConversation(8) }, ctxB)) as { messages: any[] } | undefined;
+
+	assert.equal(bCalled, 1, "session B folded while session A was still summarizing");
+	assert.ok(rB?.messages.some((m: any) => JSON.stringify(m.content ?? "").includes("<summary>")));
+
+	releaseA();
+	await pA;
+	assert.equal(aCalled, 1, "session A folded once");
+});

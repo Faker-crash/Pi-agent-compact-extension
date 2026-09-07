@@ -210,7 +210,7 @@ interface SessionState {
 
 const stateBySession = new Map<string, SessionState>();
 const configByCwd = new Map<string, MemoryCompactSettings>();
-let summarizeInFlight = false;
+const summarizeInFlight = new Set<string>();
 
 /** Read optional JSON config from <cwd>/.pi/memory-compact.json then ~/.pi/agent/memory-compact.json. */
 async function loadConfigJson(cwd: string, agentDir: string): Promise<string | undefined> {
@@ -370,10 +370,10 @@ export default function memoryCompactExtension(pi: {
 		}
 
 		// ---- perform fold (summary via the same session model) ----
-		if (foldBody && foldBody.length > 0 && !summarizeInFlight) {
+		if (foldBody && foldBody.length > 0 && !summarizeInFlight.has(sessionKey)) {
 			const model = ctx.model;
 			if (model && ctx.modelRegistry) {
-				summarizeInFlight = true;
+				summarizeInFlight.add(sessionKey);
 				try {
 					const head = messages.slice(0, headEnd);
 					const candidates = await collectMemoryCandidates(cfg, ctx.sessionManager?.getBranch?.() ?? []);
@@ -423,7 +423,7 @@ export default function memoryCompactExtension(pi: {
 				} catch (error) {
 					notify(`Memory-compact failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 				} finally {
-					summarizeInFlight = false;
+					summarizeInFlight.delete(sessionKey);
 				}
 			}
 		}
