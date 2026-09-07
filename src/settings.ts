@@ -44,6 +44,7 @@ export function parseMemoryCompactConfig(
 		bm25K1: coerce(fileConfig.bm25K1, envValue("BM25_K1"), 1.5),
 		bm25B: coerce(fileConfig.bm25B, envValue("BM25_B"), 0.75),
 		maxMemoryItemChars: coerce(fileConfig.maxMemoryItemChars, envValue("MAX_MEMORY_ITEM_CHARS"), 1200),
+		maxToolResultChars: coerce(fileConfig.maxToolResultChars, envValue("MAX_TOOL_RESULT_CHARS"), 2000),
 		...(partial ?? {}),
 	} as MemoryCompactSettings;
 	// Clamp dangerous values.

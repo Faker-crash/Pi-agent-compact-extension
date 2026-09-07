@@ -164,3 +164,23 @@ test("computeContextRoots stops at home instead of walking to filesystem root", 
 	assert.ok(!roots.includes("/"), "home boundary stops the ancestor walk before /");
 	assert.deepEqual(roots, ["/Users/u/proj", "/Users/u", "/Users/u/.pi/agent"]);
 });
+
+test("serializeMessages truncates oversized tool results with a marker", async () => {
+	const { serializeMessages, truncateMessageText } = await import("../src/serialize.ts");
+	const t = truncateMessageText("a".repeat(10_000), 2000);
+	assert.ok(t.length < 2600, `truncated text bounded: ${t.length}`);
+	assert.ok(t.includes("truncated"));
+	// long tool result capped, short ones untouched
+	const big = m("toolResult", "x".repeat(5000));
+	const small = m("user", "hi");
+	const out = serializeMessages([big, small], { truncateToolResults: 2000 });
+	assert.ok(out.includes("[Tool result]: "));
+	assert.ok(out.length < 2600, `serialized length bounded: ${out.length}`);
+});
+
+test("buildSummarizationPromptText truncates tool results when asked", async () => {
+	const { buildSummarizationPromptText } = await import("../src/prompts.ts");
+	const body = [m("toolResult", "z".repeat(8000))];
+	const prompt = buildSummarizationPromptText(body, { truncateToolResults: 2000 });
+	assert.ok(prompt.length < 8000, `prompt bounded: ${prompt.length}`);
+});

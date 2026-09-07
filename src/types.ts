@@ -72,6 +72,8 @@ export interface MemoryCompactSettings {
 	bm25B: number;
 	/** Max chars per memory candidate injected. */
 	maxMemoryItemChars: number;
+	/** Truncate tool results to this many chars when serialized for summarization. */
+	maxToolResultChars: number;
 }
 
 /** Defaults mirroring pi's reserve/keep philosophy scaled to head-keeping. */
@@ -89,6 +91,7 @@ export function defaultSettings(partial?: Partial<MemoryCompactSettings>): Memor
 		bm25K1: 1.5,
 		bm25B: 0.75,
 		maxMemoryItemChars: 1200,
+		maxToolResultChars: 2000,
 		...partial,
 	};
 }

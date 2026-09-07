@@ -409,6 +409,7 @@ export default function memoryCompactExtension(pi: {
 						previousSummary,
 						headText: head.map((m) => m.text).join("\n").slice(0, 2000),
 						memories,
+						truncateToolResults: cfg.maxToolResultChars,
 					});
 					const response = await ctx.modelRegistry.complete(
 						model,

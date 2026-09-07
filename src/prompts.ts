@@ -87,9 +87,11 @@ export function buildSummarizationPromptText(
 		previousSummary?: string;
 		headText?: string;
 		memories?: MemoryCandidate[];
+		/** Truncate tool results to this many chars (pi-compatible, B7). */
+		truncateToolResults?: number;
 	},
 ): string {
-	const conversationText = serializeMessages(body);
+	const conversationText = serializeMessages(body, { truncateToolResults: opts?.truncateToolResults });
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
 	const contextParts: string[] = [];
 	if (opts?.headText) {

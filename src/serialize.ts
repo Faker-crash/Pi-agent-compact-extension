@@ -29,13 +29,32 @@ export function isTurnStartRole(role: string): boolean {
 	return TURN_START_ROLES.has(role);
 }
 
-/** Serialize messages into the same labelled format pi uses for summarization input. */
-export function serializeMessages(messages: PlainMessage[]): string {
-	return messages.map(serializeOne).join("\n");
+/**
+ * Truncate a message's text, keeping the tail and adding a marker.
+ * Mirrors pi's tool-result truncation so huge bash/read outputs do not blow up
+ * the summarization request (B7). Truncation only affects the text projection
+ * used for serialization/token estimation — the verbatim head is untouched.
+ */
+export function truncateMessageText(text: string, maxChars: number): string {
+	if (text.length <= maxChars) return text;
+	const head = text.slice(0, Math.max(0, Math.floor(maxChars * 0.6)));
+	const tail = text.slice(text.length - Math.floor(maxChars * 0.4));
+	return `${head}\n…[truncated ${text.length - maxChars} chars]…\n${tail}`;
 }
 
-function serializeOne(msg: PlainMessage): string {
-	const text = msg.text;
+/** Serialize messages into the same labelled format pi uses for summarization input. */
+export function serializeMessages(
+	messages: PlainMessage[],
+	opts?: { truncateToolResults?: number },
+): string {
+	return messages.map((m) => serializeOne(m, opts?.truncateToolResults)).join("\n");
+}
+
+function serializeOne(msg: PlainMessage, truncateToolResults?: number): string {
+	let text = msg.text;
+	if (truncateToolResults && msg.isToolResult) {
+		text = truncateMessageText(text, truncateToolResults);
+	}
 	switch (msg.role) {
 		case "user":
 			return `[User]: ${text}`;
