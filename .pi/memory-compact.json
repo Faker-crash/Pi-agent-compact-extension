@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "headMessages": 5,
+  "memoryItems": 5,
+  "triggerRatio": 0.75,
+  "useAgentsMd": true,
+  "useSiblingSessions": true,
+  "bm25K1": 1.5,
+  "bm25B": 0.75,
+  "maxMemoryItemChars": 1200
+}
