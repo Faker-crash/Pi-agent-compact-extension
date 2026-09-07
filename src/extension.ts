@@ -11,7 +11,7 @@ import {
 	type Checkpoint,
 	type CustomEntryLike,
 } from "./compact.ts";
-import { estimateTokens, planFold, planHead, type FoldPolicy } from "./plan.ts";
+import { estimateContextTokens, estimateTokens, planFold, planHead, type FoldPolicy } from "./plan.ts";
 import { rankMemories, truncateMemories } from "./memory.ts";
 import { buildSummarizationPromptText, SUMMARIZATION_SYSTEM_PROMPT } from "./prompts.ts";
 import {
@@ -39,6 +39,13 @@ interface RawMessageLike {
 	toolCallId?: string;
 	toolName?: string;
 	timestamp?: number | string;
+	usage?: {
+		totalTokens?: number;
+		input?: number;
+		output?: number;
+		cacheRead?: number;
+		cacheWrite?: number;
+	} | null;
 }
 
 const TURN_START: ReadonlySet<string> = new Set([
@@ -79,6 +86,15 @@ function contentToText(content: unknown): string {
 function toPlain(msg: RawMessageLike): PlainMessage {
 	const role = msg.role as PlainRole;
 	let text = "";
+	let usageTokens: number | undefined;
+	if (role === "assistant" && msg.usage) {
+		const u = msg.usage;
+		usageTokens =
+			u.totalTokens && u.totalTokens > 0
+				? u.totalTokens
+				: (u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+		if (!usageTokens || usageTokens <= 0) usageTokens = undefined;
+	}
 	switch (role) {
 		case "toolResult":
 			text = contentToText(msg.content);
@@ -93,12 +109,14 @@ function toPlain(msg: RawMessageLike): PlainMessage {
 		default:
 			text = contentToText(msg.content);
 	}
-	return {
+	const plain: PlainMessage = {
 		role,
 		text,
 		isToolResult: role === "toolResult",
 		isTurnStart: TURN_START.has(role),
 	};
+	if (usageTokens !== undefined) plain.usageTokens = usageTokens;
+	return plain;
 }
 
 function toPlainList(messages: RawMessageLike[]): PlainMessage[] {
@@ -384,7 +402,7 @@ export default function memoryCompactExtension(pi: {
 			const policy: FoldPolicy = manual ? "fold-all" : "keep-latest-turn";
 			const plan = planFold(messages, bodyStart, policy);
 			if (plan.body.length > 0) {
-				const tokens = estimateTokens(messages);
+				const tokens = estimateContextTokens(messages).tokens;
 				const pressureHigh = contextWindow > 0 && tokens > contextWindow * cfg.triggerRatio;
 				const enoughNew = estimateTokens(plan.body) >= 2048;
 				if (manual || (pressureHigh && enoughNew)) {
@@ -438,7 +456,7 @@ export default function memoryCompactExtension(pi: {
 							foldThrough: newFoldThrough,
 							memories,
 							summary,
-							tokensBefore: estimateTokens(messages),
+							tokensBefore: estimateContextTokens(messages).tokens,
 						};
 						st.checkpoint = checkpoint;
 						foldSucceeded = true;

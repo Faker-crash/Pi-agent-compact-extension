@@ -26,6 +26,8 @@ export interface PlainMessage {
 	isTurnStart: boolean;
 	/** Stable identity across rewrites, when available (entry id). */
 	anchorId?: string;
+	/** Confirmed context tokens from provider usage, when available (assistant msgs). */
+	usageTokens?: number;
 }
 
 /** Serialized conversation block fed to the summarizer. */

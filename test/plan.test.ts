@@ -133,3 +133,27 @@ test("estimateTokens & shouldCompactNow agree on thresholds", () => {
 	const s = shouldCompactNow(messages, 1000, defaultSettings({ triggerRatio: 0.5 }));
 	assert.equal(s.shouldFold, true);
 });
+
+test("estimateContextTokens reuses assistant usage and estimates only the tail", async () => {
+	const { estimateContextTokens, estimateTokens } = await import("../src/plan.ts");
+	const msgs = [
+		{ ...msg("user"), text: "a".repeat(400) },
+		{ ...msg("assistant"), text: "b".repeat(400), usageTokens: 5000 },
+		{ ...msg("toolResult"), text: "c".repeat(400) },
+		{ ...msg("user"), text: "d".repeat(400) },
+	];
+	const est = estimateContextTokens(msgs);
+	assert.equal(est.usageTokens, 5000);
+	assert.equal(est.lastUsageIndex, 1);
+	assert.equal(est.trailingTokens, estimateTokens(msgs.slice(2)));
+	assert.equal(est.tokens, 5000 + est.trailingTokens);
+});
+
+test("estimateContextTokens falls back to chars/4 without usage", async () => {
+	const { estimateContextTokens, estimateTokens } = await import("../src/plan.ts");
+	const msgs = mk(["user", "assistant"], ["x".repeat(800), "y".repeat(800)]);
+	const est = estimateContextTokens(msgs);
+	assert.equal(est.lastUsageIndex, -1);
+	assert.equal(est.usageTokens, 0);
+	assert.equal(est.tokens, estimateTokens(msgs));
+});

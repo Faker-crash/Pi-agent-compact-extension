@@ -54,6 +54,42 @@ export function estimateTokens(messages: PlainMessage[]): number {
 	return Math.ceil(chars / 4);
 }
 
+export interface ContextEstimate {
+	/** Best-known token count: last assistant usage + estimated trailing messages. */
+	tokens: number;
+	/** Index of the assistant message whose usage was used, or -1. */
+	lastUsageIndex: number;
+	/** Tokens taken verbatim from provider usage. */
+	usageTokens: number;
+	/** Estimated tokens of messages after the last usage point. */
+	trailingTokens: number;
+}
+
+/**
+ * Usage-aware context estimate (B8): like pi's estimateContextTokens, if the
+ * most recent assistant message carries confirmed provider usage, reuse it as
+ * the exact context size up to that message and only estimate the trailing
+ * messages (tool results etc.). Without any usage it degrades to chars/4.
+ */
+export function estimateContextTokens(messages: PlainMessage[]): ContextEstimate {
+	let lastUsageIndex = -1;
+	let usageTokens = 0;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (m.role === "assistant" && typeof m.usageTokens === "number" && m.usageTokens > 0) {
+			lastUsageIndex = i;
+			usageTokens = m.usageTokens;
+			break;
+		}
+	}
+	if (lastUsageIndex === -1) {
+		const trailing = estimateTokens(messages);
+		return { tokens: trailing, lastUsageIndex: -1, usageTokens: 0, trailingTokens: trailing };
+	}
+	const trailingTokens = estimateTokens(messages.slice(lastUsageIndex + 1));
+	return { tokens: usageTokens + trailingTokens, lastUsageIndex, usageTokens, trailingTokens };
+}
+
 export interface CompactDecision {
 	/** Whether a (new) fold should be produced now. */
 	shouldFold: boolean;
