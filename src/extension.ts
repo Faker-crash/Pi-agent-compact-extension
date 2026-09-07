@@ -206,6 +206,8 @@ interface SessionState {
 	checkpoint?: Checkpoint;
 	/** Set by the manual command: perform a full fold at the next request. */
 	pendingManual?: boolean;
+	/** Number of consecutive failed manual fold attempts (fail-safe retry). */
+	manualFailures?: number;
 }
 
 const stateBySession = new Map<string, SessionState>();
@@ -346,6 +348,7 @@ export default function memoryCompactExtension(pi: {
 				messages.length < checkpoint.foldThrough
 			) {
 				checkpoint = undefined;
+				st.checkpoint = undefined;
 			}
 		}
 
@@ -370,6 +373,7 @@ export default function memoryCompactExtension(pi: {
 		}
 
 		// ---- perform fold (summary via the same session model) ----
+		let foldSucceeded = false;
 		if (foldBody && foldBody.length > 0 && !summarizeInFlight.has(sessionKey)) {
 			const model = ctx.model;
 			if (model && ctx.modelRegistry) {
@@ -414,23 +418,54 @@ export default function memoryCompactExtension(pi: {
 							tokensBefore: estimateTokens(messages),
 						};
 						st.checkpoint = checkpoint;
+						foldSucceeded = true;
 						try {
 							pi.appendEntry(CHECKPOINT_ENTRY_TYPE, serializeCheckpoint(checkpoint));
 						} catch {
 							// Persistence is best-effort; the in-memory checkpoint still applies.
 						}
+					} else {
+						notify("Memory-compact summary was empty; nothing was folded.", "warning");
 					}
 				} catch (error) {
 					notify(`Memory-compact failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 				} finally {
 					summarizeInFlight.delete(sessionKey);
 				}
+			} else {
+				notify("Memory-compact could not fold: no model is available in this context.", "warning");
 			}
 		}
 
-		st.pendingManual = false;
+		// Manual compact: clear the armed flag only on success; keep it on failure so
+		// the next request retries (bounded to avoid spamming a broken setup). When
+		// there is simply nothing foldable yet (e.g. a single in-flight turn), keep it
+		// armed without counting a failure.
+		if (foldSucceeded) {
+			st.manualFailures = 0;
+			st.pendingManual = false;
+			notify(
+				`Memory-compact: kept ${headEnd} opening messages, injected ${checkpoint?.memories.length ?? 0} memories, folded the rest into a summary.`,
+				"info",
+			);
+		} else if (manual && foldBody && foldBody.length > 0) {
+			st.manualFailures = (st.manualFailures ?? 0) + 1;
+			if (st.manualFailures >= 3) {
+				st.pendingManual = false;
+				st.manualFailures = 0;
+				notify("Memory-compact kept failing; use /memory-compact again once the issue is fixed.", "error");
+			} else {
+				st.pendingManual = true;
+				notify("Memory-compact will retry on the next request (it could not fold just now).", "warning");
+			}
+		} else if (manual) {
+			st.pendingManual = true;
+		} else {
+			st.pendingManual = false;
+		}
+		st.checkpoint = checkpoint;
+		stateBySession.set(sessionKey, st);
 		if (checkpoint) {
-			stateBySession.set(sessionKey, { checkpoint });
 			const view = buildView(messages, checkpoint);
 			if (view.head.length === 0) return undefined;
 			const out: RawMessageLike[] = [];
@@ -447,7 +482,8 @@ export default function memoryCompactExtension(pi: {
 			return { messages: out };
 		}
 
-		stateBySession.set(sessionKey, { checkpoint: undefined });
+		st.checkpoint = undefined;
+		stateBySession.set(sessionKey, st);
 		return undefined;
 	});
 

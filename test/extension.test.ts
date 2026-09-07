@@ -266,3 +266,52 @@ test("integration: folding is locked per session, not globally", async () => {
 	await pA;
 	assert.equal(aCalled, 1, "session A folded once");
 });
+
+test("integration: manual fold failure keeps the request armed and retries on the next request", async () => {
+	await makeEnv();
+	const ext = await loadExtension();
+	const ctx = makeCtx(longConversation(8));
+	let calls = 0;
+	ctx.modelRegistry.complete = async () => {
+		calls++;
+		if (calls === 1) throw new Error("simulated provider failure");
+		return { content: [{ type: "text", text: "## Goal\nretry summary" }] };
+	};
+
+	await ext.command.handler("", ctx);
+	const failed = await ext.handlers.get("context")!({ messages: longConversation(8) }, ctx);
+	assert.equal(failed, undefined, "failed fold leaves no compacted view");
+
+	// Armed flag must still be set: the next request retries without a new /memory-compact.
+	const retried = (await ext.handlers.get("context")!({ messages: longConversation(8) }, ctx)) as { messages: any[] } | undefined;
+	assert.ok(retried?.messages, "retried fold succeeded without re-arming");
+	const injected = retried.messages.find((m: any) =>
+		Array.isArray(m.content) && m.content.some((c: any) => typeof c.text === "string" && c.text.includes("retry summary")),
+	);
+	assert.ok(injected, "summary from the retried fold is injected");
+	assert.equal(calls, 2);
+});
+
+test("integration: manual fold failures cap after three attempts", async () => {
+	await makeEnv();
+	const ext = await loadExtension();
+	const ctx = makeCtx(longConversation(8));
+	ctx.modelRegistry.complete = async () => {
+		throw new Error("always failing");
+	};
+	await ext.command.handler("", ctx);
+	for (let i = 0; i < 4; i++) {
+		await ext.handlers.get("context")!({ messages: longConversation(8) }, ctx);
+	}
+	// After 3 failures the flag is dropped; a 5th request must not attempt another fold.
+	let calls = 0;
+	const probe = makeCtx(longConversation(8));
+	const original = ctx.modelRegistry.complete;
+	ctx.modelRegistry.complete = async () => {
+		calls++;
+		return { content: [{ type: "text", text: "## Goal\nx" }] };
+	};
+	await ext.handlers.get("context")!({ messages: longConversation(8) }, ctx);
+	assert.equal(calls, 0, "armed flag cleared after repeated failures");
+	ctx.modelRegistry.complete = original;
+});
