@@ -1,34 +1,42 @@
-# pi-agent 记忆锚定 Compact（memory-anchored compact）
+# pi-agent Memory-Anchored Compact
 
-为已安装的 **pi CLI**（`@earendil-works/pi-coding-agent` ≥ 0.85）实现的自定义上下文压缩机制，
-严格按以下算法：
+[English](README.md) | [简体中文](README.zh.md)
 
-1. **保留前 N 条消息** — 对话开头（任务/约束）逐字原样保留；
-2. **检索与前 N 条消息相关的记忆，保留 N 条** — 从 pi 自身会话历史/树（AGENTS.md、
-   历史会话、既有 compaction/branch 摘要）检索相关记忆注入；
-3. **固定 system prompt 部分** — 不触碰 system prompt；
-4. **剩下的全部压缩成摘要** — 头部之后的完整回合折叠为一份结构化摘要。
+A custom context-compaction extension for the installed **pi CLI**
+(`@earendil-works/pi-coding-agent` ≥ 0.85), implementing exactly this algorithm:
 
-与 pi 原生压缩（保尾压头，`keepRecentTokens`）相反，本机制**保头压尾**，并在头部与摘要之间
-注入“与开头任务相关的记忆”，保证长会话中任务定义与关键约束永不丢失。
+1. **Keep the first N messages** — the opening messages (task/constraints) stay verbatim;
+2. **Retrieve memories related to the first N messages, keep N of them** — memories are
+   retrieved from pi's own session history/tree (AGENTS.md family, historical sessions,
+   existing compaction/branch summaries) and injected;
+3. **Keep the system prompt fixed** — it is never touched;
+4. **Fold everything else into a summary** — complete turns after the head are collapsed
+   into one structured summary.
 
-设计文档见 [`DESIGN.md`](./DESIGN.md)。
+Unlike pi's native compaction (which keeps the *recent* tail via `keepRecentTokens` and
+summarizes the *old* head), this mechanism **keeps the head and folds the tail**, and injects
+memories relevant to the opening task between the head and the summary — so the task
+definition and key constraints never get lost in long sessions.
 
-## 实现方式：路线 A（纯扩展，不改 pi 核心）
+Design document: [`DESIGN.md`](./DESIGN.md).
 
-- 注册 `/memory-compact [N]` 命令与自动触发；
-- 通过扩展 `context` 事件在每次模型请求前把消息列表**重写**为
-  `system + 开头 N 条（逐字） + 记忆块 + 摘要块 + 最新回合`；
-- 会话 JSONL 与 pi 原生机制零改动，升级 pi 后仍可用；`/tree` 历史完整保留。
+## Implementation: Route A (pure extension, no pi core changes)
 
-纯逻辑在 `src/plan.ts` / `src/compact.ts` / `src/memory.ts` / `src/sources.ts` 等，
-**不依赖 pi 运行时**，可用 `node --test` 直接单测；`src/extension.ts` 是薄薄的 pi 适配层。
+- Registers `/memory-compact [N]` and `/memory-compact reset` commands plus automatic triggering;
+- The `context` event rewrites the request view before every model call to
+  `system + opening N (verbatim) + memory block + summary block + latest turns`;
+- Session JSONL and pi internals are left untouched, so pi upgrades keep working and the
+  full `/tree` history is preserved.
 
-## 安装 / 启用
+All core logic lives in `src/plan.ts` / `src/compact.ts` / `src/memory.ts` /
+`src/sources.ts` etc. — **no pi runtime dependency**, unit-testable with `node --test`.
+`src/extension.ts` is a thin pi adapter.
 
-### 1. 禁用 pi 原生自动压缩（避免两套压缩打架）
+## Install / Enable
 
-在 `~/.pi/agent/settings.json` 或项目 `.pi/settings.json` 中加入：
+### 1. Disable pi's native auto-compaction (avoid two compactors fighting)
+
+Add to `~/.pi/agent/settings.json` or the project `.pi/settings.json`:
 
 ```json
 {
@@ -37,15 +45,14 @@
 }
 ```
 
-> 扩展加载后：手动执行 `/memory-compact`，或让自动触发在上下文压力过高时执行。
-> pi 原生 `/compact` 仍可用，但会走官方“保尾”语义；本机制建议只用 `/memory-compact`。
-> 若希望 `/compact` 也被接管，可另在 `~/.pi/agent/extensions/` 放一个
-> `session_before_compact` 的转发器（见下）。
+> Once the extension is loaded, run `/memory-compact` manually or let automatic triggering
+> fire when context pressure gets high. pi's native `/compact` still works but uses the
+> official "keep-recent" semantics; prefer `/memory-compact` with this mechanism.
 
-### 2. 可选配置
+### 2. Optional configuration
 
-项目级：`.pi/memory-compact.json`；全局：`~/.pi/agent/memory-compact.json`。
-也可用环境变量 `PI_MEMORY_COMPACT_*` 覆盖。
+Project-level: `.pi/memory-compact.json`; global: `~/.pi/agent/memory-compact.json`.
+Environment variables `PI_MEMORY_COMPACT_*` override any of these.
 
 ```json
 {
@@ -61,69 +68,74 @@
 }
 ```
 
-| 键 | 默认 | 含义 |
+| Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | 总开关 |
-| `headMessages` | `5` | 开头逐字保留的消息数 N（会自动补齐到完整回合，绝不切断工具成对消息） |
-| `memoryItems` | `5` | 注入记忆条数 N |
-| `triggerRatio` | `0.75` | 上下文占用达窗口比例时自动折叠一次（并需新增内容 ≥ 2048 tokens 才重复折叠） |
-| `useAgentsMd` | `true` | 记忆源：AGENTS.md / CLAUDE.md / AGENTS.override.md（cwd 向上 + agentDir） |
-| `useSiblingSessions` | `true` | 记忆源：同项目历史会话 JSONL（compaction/branch 摘要 + 首条用户消息） |
-| `bm25K1` / `bm25B` | `1.5` / `0.75` | BM25 参数 |
-| `maxMemoryItemChars` | `1200` | 单条注入记忆上限 |
+| `enabled` | `true` | Master switch |
+| `headMessages` | `5` | Number of leading messages kept verbatim (auto-extended to a full turn; never splits paired tool messages) |
+| `memoryItems` | `5` | Number of memory items injected |
+| `triggerRatio` | `0.75` | Auto-fold when context usage exceeds this fraction of the window (and only when ≥ 2048 new tokens accrued) |
+| `useAgentsMd` | `true` | Memory source: AGENTS.md / CLAUDE.md / AGENTS.override.md (cwd upward + agentDir) |
+| `useSiblingSessions` | `true` | Memory source: same-project historical session JSONLs (compaction/branch summaries + first user message) |
+| `bm25K1` / `bm25B` | `1.5` / `0.75` | BM25 parameters |
+| `maxMemoryItemChars` | `1200` | Max chars per injected memory item |
 
-### 3. 使用
+### 3. Usage
 
 ```
-/memory-compact          # 手动触发（下次请求时执行），按当前配置
-/memory-compact 10       # 手动触发，本次 N=10
-/memory-compact reset    # 清除当前会话压缩检查点
+/memory-compact          # manual trigger (runs at the next request), current config
+/memory-compact 10       # manual trigger, N=10 for this run
+/memory-compact reset    # clear the current session's compact checkpoint
 ```
 
-自动触发：当估算上下文 > `triggerRatio × contextWindow` 且头部之后有足够的新完整回合时，
-在 `context` 事件中自动折叠一次；同一轮内不会重复折叠。
+Automatic triggering: when the estimated context exceeds
+`triggerRatio × contextWindow` and enough new complete turns exist after the head,
+one fold runs inside the `context` event; it never re-folds within the same round.
 
-## 记忆源（步骤 2 的实现）
+## Memory sources (how step 2 is implemented)
 
-查询 = 开头 N 条消息里的用户文本。候选记忆来自：
+Query = user text of the opening N messages. Candidate memories come from:
 
-- `AGENTS.md` / `CLAUDE.md` / `AGENTS.override.md`：从 cwd 向上至 agentDir，以及 agentDir 本身；
-- 同项目会话目录 `~/.pi/agent/sessions/--<cwd>--/*.jsonl` 中其它会话的
-  `compaction` 摘要、`branch_summary` 摘要、首个用户消息（排除当前会话文件）；
-- 打分：无嵌入的轻量 **BM25**（中文按 2-gram + 拉丁词），叠加**时间衰减**
-  （约 14 天半衰期），Top-N 注入，超长条目截断。
+- `AGENTS.md` / `CLAUDE.md` / `AGENTS.override.md`: from cwd up to agentDir, plus agentDir itself;
+- Other sessions under the same-project session dir
+  `~/.pi/agent/sessions/--<cwd>--/*.jsonl`: their `compaction` summaries,
+  `branch_summary` summaries and first user messages (current session file excluded);
+- Scoring: lightweight **BM25** without embeddings (CJK 2-grams + latin words) plus
+  **time decay** (~14-day half-life), Top-N injected, over-long items truncated.
 
-## 安全边界
+## Safety boundaries
 
-- 折叠只发生在**完整回合边界**，永不切断 assistant `toolCall` 与其 `toolResult`；
-- 未结束的“当前回合”始终逐字保留（避免打断工具循环）；手动 `/memory-compact` 采用
-  `fold-all`：除“尚未被回答的用户提问”外全部折叠；
-- system prompt 完全不动；
-- 会话文件只读、零删除（重写只发生在发给模型的请求视图上）；
-- 摘要为空 / 模型调用失败时放弃本次折叠，绝不影响用户请求。
+- Folding only happens at **complete turn boundaries**; an assistant `toolCall` is never
+  separated from its `toolResult`;
+- The still-running "current turn" always stays verbatim (so tool loops are not disturbed);
+  manual `/memory-compact` uses `fold-all`: everything folds except an unanswered user prompt;
+- The system prompt is never modified;
+- Session files are read-only, nothing is deleted (rewrites only affect the request view);
+- An empty summary or a failed model call abandons that fold — it never affects the user request.
 
-## 测试
+## Tests
 
 ```sh
 node --test "test/*.test.ts"
 ```
 
-覆盖：头部边界选择（含工具成对、退化会话）、折叠边界（两种策略）、触发阈值、
-BM25 中英混排打分、会话 JSONL 记忆抽取、摘要 prompt 构造、布局切片与注入格式。
+Coverage: head boundary selection (incl. tool pairing and degenerate sessions), fold
+boundaries (both policies), trigger thresholds, BM25 with mixed CJK/English scoring,
+session JSONL memory extraction, summary prompt construction, layout slicing and
+injection formatting.
 
-## 文件
+## Files
 
 ```
-src/types.ts        纯类型与默认配置
-src/serialize.ts    消息序列化 / turn-start 判定
-src/plan.ts         head 边界 + 折叠边界 + 触发决策（纯函数）
-src/memory.ts       分词 + BM25 排序 + 截断（纯函数）
-src/sources.ts      会话 JSONL / AGENTS.md 记忆抽取（纯函数）
-src/compact.ts      检查点 → 视图切片 / 注入块组装（纯函数）
-src/prompts.ts      结构化摘要 prompt（与 pi 原生格式一致）
-src/settings.ts     配置解析（纯函数）
-src/retrieve-query.ts 记忆查询文本（纯函数）
-src/extension.ts    pi 扩展适配层（事件、命令、文件 I/O、模型调用）
-test/*.test.ts      单元测试
-DESIGN.md           设计方案
+src/types.ts          Pure types and defaults
+src/serialize.ts      Message serialization / turn-start detection
+src/plan.ts           Head boundary + fold boundary + trigger decision (pure)
+src/memory.ts         Tokenization + BM25 ranking + truncation (pure)
+src/sources.ts        Session JSONL / AGENTS.md memory extraction (pure)
+src/compact.ts        Checkpoint → view slicing / injected block assembly (pure)
+src/prompts.ts        Structured summary prompt (pi-native format)
+src/settings.ts       Config parsing (pure)
+src/retrieve-query.ts Memory query text (pure)
+src/extension.ts      pi extension adapter (events, commands, file I/O, model calls)
+test/*.test.ts        Unit tests
+DESIGN.md             Design document
 ```
